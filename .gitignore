@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+
+# Logs and caches
+*.log
+*.cache
+*.coverage
+.hypothesis/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints
+
+# macOS
+.DS_Store
+
+# Data files
+*individual_votes.xlsx
+*.RData
+*.png 
+
