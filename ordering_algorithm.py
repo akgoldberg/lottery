@@ -2,38 +2,17 @@ import numpy as np
 import cvxpy as cp
 import matplotlib.pyplot as plt
 from collections import defaultdict
-import itertools
-import bisect
+
+from helpers import prune_instance, sort_intervals, partition_intervals, generate_prefix_selections, postprocess_solution
 
 #######################################################################
 #                           Optimization                              #
 #######################################################################
 
-# Given a list of intervals, return a list of constraints where each constraint is a tuple (i, j).
-def get_constraints(intervals):
-    n = len(intervals)
-    # tuples where LCB_i > UCB_j => i < j
-    constraints = [(i,j) for i in range(n) for j in range(n) if intervals[i][0] > intervals[j][1]]
-    return constraints
+def solve_instance_base(intervals, T, k, add_adversary_constraints, lex_order_p=0, verbose=True, prune=True, p_lower_bound=None, postprocess=True):
+    if verbose:
+        print(f'Solving instance with n={len(intervals)}, k={k}.')
 
-# Given a list of intervals and a number T, prune out intervals that are always in the top T or never in the top T.
-def prune_instance(intervals, T):
-    n = len(intervals)
-    constraints = get_constraints(intervals)
-    A = [0]*len(intervals)
-    B = [0]*len(intervals)
-    for c in constraints:
-        A[c[0]] += 1 # num intervals that i is strictly above 
-        B[c[1]] += 1 # num intervals that i is strictly below
-    # if A[i] >= n-T, then i must be in the top T
-    top = [i for i in range(n) if A[i] >= n-T]
-    # if B[i] >= T, then i is never in the top T
-    bottom = [i for i in range(n) if B[i] >= T]
-    # remove top and bottom from intervals
-    intervals = [i for i in range(n) if i not in top+bottom]
-    return intervals, top, bottom
-
-def solve_instance_base(intervals, T, k, add_adversary_constraints, lex_order_p=0, verbose=True, prune=True, p_lower_bound=None):
     if prune: 
         # (1) prune all intervals that are always in the top T or never in the top T
         indices_pruned, top, _ = prune_instance(intervals, T)
@@ -95,23 +74,27 @@ def solve_instance_base(intervals, T, k, add_adversary_constraints, lex_order_p=
 
     if verbose:
         print(f'Solved with optimal value: {v_star} out of {k_pruned}.')
+    
+    if v_star is None:
+        raise('No solution found to optimization problem.')
 
     # (3) post-process solution to ensure that if i dominates j, then either p_i = 1 or p_j = 0
-    p_star = postprocess_solution(p_star, intervals_pruned)
-    if verbose:
-        print(f'Finished post-processing solution.')
+    if postprocess:
+        p_star = postprocess_solution(p_star, intervals_pruned)
+        if verbose:
+            print(f'Finished post-processing solution.')
 
     # (4) add top and bottom intervals back to the solution with p=1 and p=0 respectively
     v_out = v_star + len(top)
     p_out = np.zeros(len(intervals))
     for i, p_i in enumerate(p_star):
         p_out[indices_pruned[i]] = p_i
-    p_out[top] = 1
-    return v_out, p_out
+    p_out[top] = 1.
+    return v_out, np.clip(p_out, 0, 1) 
 
 # Given a list of intervals, a permutation of indices p_order specifying order of p_i
 # solve the instance and return the optimal value and the optimal p vector.
-def solve_instance_ordered(intervals, T, k, p_order, lex_order_p=0, prune=False, verbose=True, p_lower_bound=None):
+def solve_instance_ordered(intervals, T, k, p_order, lex_order_p=0, prune=False, verbose=True, p_lower_bound=None, postprocess=False):
     # validate input
     assert all(intervals[i][0] >= intervals[i+1][0] for i in range(len(intervals)-1)), "Intervals not sorted in decreasing order of LCB."
     constraints = get_constraints(intervals)
@@ -136,16 +119,21 @@ def solve_instance_ordered(intervals, T, k, p_order, lex_order_p=0, prune=False,
             cp_constraints += [v <= cp.sum([p[j] for j in range(i)]) + cp.sum([p[j] for j in J_i])]
         return cp_constraints
     
-    return solve_instance_base(intervals, T, k, add_constraints, lex_order_p, verbose, prune, p_lower_bound)
+    return solve_instance_base(intervals, T, k, add_constraints, lex_order_p, verbose, prune, p_lower_bound, postprocess)
 
 # Given a list of intervals, return the optimal value and the optimal p vector.
-def solve_instance_unordered(intervals, T, k, p_order, lex_order_p=0, verbose=True, prune=True, p_lower_bound=None):
-    # re-order intervals by number above and below each interval
+def solve_instance_unordered(intervals, T, k, lex_order_p=0, verbose=True, prune=True, p_lower_bound=None, postprocess=True):
+    # re-order intervals by decreasing number of intervals strictly below each interval breaking ties incresaing order of intervals above 
     intervals, order = sort_intervals(intervals)
+    # re-order p_lower_bound to match the new order of intervals
+    if p_lower_bound is not None:
+        p_lower_bound = [p_lower_bound[i] for i in order]
 
     def add_constraints(p, v, intervals, T):
         # Get monotonic and non-monotonic intervals
         _, inds = partition_intervals(intervals, return_inds=True)
+        if verbose:
+            print('Partitioned intervals into {} subsets.'.format(len(inds)))
 
         cp_constraints = []
         # Constraints: p is monotonically non-increasing for intervals within each partition
@@ -165,7 +153,7 @@ def solve_instance_unordered(intervals, T, k, p_order, lex_order_p=0, verbose=Tr
                 cp_constraints += [v <= cp.sum([p[j] for j in range(i)]) + cp.sum([p[j] for j in selection])]
         return cp_constraints
     
-    v, p = solve_instance_base(intervals, T, k, add_constraints, lex_order_p, verbose, prune, p_lower_bound)
+    v, p = solve_instance_base(intervals, T, k, add_constraints, lex_order_p, verbose, prune, p_lower_bound, postprocess)
     # reorder p to original order
     p_out = np.zeros(len(intervals))
     for i, p_i in enumerate(p):
@@ -173,7 +161,7 @@ def solve_instance_unordered(intervals, T, k, p_order, lex_order_p=0, verbose=Tr
     return v, p_out
 
 # Given a list of intervals, return the optimal value and the optimal p vector.
-def solve_instance_bruteforce(intervals, T, k, p_order=None, lex_order_p=0, verbose=True, prune=True, p_lower_bound=None):
+def solve_instance_bruteforce(intervals, T, k, p_order=None, lex_order_p=0, verbose=True, prune=True, p_lower_bound=None, postprocess=True):
     if p_order is not None:
         constraints = get_constraints(intervals)
         assert all((p_order[i] < p_order[j]) for i,j in constraints), "p_order violates constraints."
@@ -200,90 +188,39 @@ def solve_instance_bruteforce(intervals, T, k, p_order=None, lex_order_p=0, verb
         
         return cp_constraints
 
-    return solve_instance_base(intervals, T, k, add_constraints, lex_order_p, verbose, prune, p_lower_bound)
+    return solve_instance_base(intervals, T, k, add_constraints, lex_order_p, verbose, prune, p_lower_bound, postprocess)
 
-# Ensure that if i dominates j, then either p_i = 1 or p_j = 0
-def postprocess_solution(p, intervals):
-    items = list(zip(p, intervals, range(len(p))))
-    
-    # Sort items by the upper bound of intervals (u_i)
-    items.sort(key=lambda x: x[1][1])
-    
-    # Extract the sorted probabilities, intervals, and original indices
-    sorted_p, sorted_intervals, original_indices = zip(*items)
-    
-    # Convert sorted_p to a list for mutability
-    sorted_p = list(sorted_p)
-    
-    n = len(sorted_p)
-    
-    # Iterate over each element in the sorted list
-    for b in range(n):
-        if sorted_p[b] == 0:
-            break
-        for a in range(n-1, b, -1):
-            if sorted_intervals[a][0] > sorted_intervals[b][1] and sorted_p[a] < 1:
-                d = min(sorted_p[b], 1 - sorted_p[a])
-                sorted_p[b] -= d
-                sorted_p[a] += d
-    
-    # Reorder the probabilities to match the original order
-    adjusted_p = [0] * n
-    for i, index in enumerate(original_indices):
-        adjusted_p[index] = sorted_p[i]
-    
-    return adjusted_p
-
-
-#######################################################################
-#                           Sampling                                  #
-#######################################################################
-
-# Sample exaclty k items from a population with marginal probabilities given by p (p sum to k).
-# Returns a list of indices of selected items
-# Source: https://projecteuclid.org/journals/annals-of-mathematical-statistics/volume-20/issue-3/On-the-Theory-of-Systematic-Sampling-II/10.1214/aoms/1177729988.full
-def systematic_sampling(k, p):
-    n = len(p)
-    assert np.isclose(sum(p), k), "Marginal probabilities must sum to k"
-
-    # Randomly permute order of items
-    perm = np.random.permutation(n)
-    p = [p[i] for i in perm]
-
-    # Compute cumulative probabilities with S[0] = 0
-    S = np.cumsum(p)
-    S = np.insert(S, 0, 0)  # Now length n+1
-    
-    # Generate sorted sampling points 
-    u = np.random.uniform(0, 1)
-    sampling_points = [u + m for m in range(k)]
-    
-    # Select items with each point in [S[j], S[j+1])
-    selected = []
-    j = 0  # Pointer to current interval
-    for point in sampling_points:
-        # Advance pointer until we find S[j] > point
-        while j < len(S) and S[j] <= point:
-            j += 1
-        selected.append(perm[j-1])  # Items are 1-indexed, so we subtract 1
-    
-    return selected
-
-# verify that systematic sampling works as expected 
-def verify_sampling(n, k, p, num_trials=10_000):
-    counts = np.zeros(n)
-    
-    for _ in range(num_trials):
-        sample = systematic_sampling(k, p)
-        for item in sample:
-            counts[item] += 1
-            
-    empirical_p = counts / num_trials  # Correct normalization
-    return empirical_p
+# Solve sequence of optimization problems to ensure p is monotonic in k
+def solve_sequence(intervals, k, lex_order_p=0, verbose=True, prune=True, postprocess=True, return_seq=False, check_monotonicity=True):
+    p_lower_bound=None
+    p_seq = []
+    v_seq = []
+    for i in range(1, k+1):
+        # Solve the instance with the current lower bound
+        v, p = solve_instance_unordered(intervals, i, i, lex_order_p=lex_order_p, verbose=verbose, prune=prune, p_lower_bound=p_lower_bound, postprocess=postprocess)
+        if check_monotonicity and p_lower_bound is not None:
+            for j in range(len(p)):
+                # Ensure that p is monotonic in k
+                assert(p[j] >= p_lower_bound[j] or np.isclose(p[j], p_lower_bound[j], atol=0.002)), f"p is not monotonic for k={i} p({j})={round(p[j],3)} and (k-1)={i-1}, p({j})={round(p_lower_bound[j],3)})."
+        # Update the lower bound for the next iteration
+        p_lower_bound = p
+        p_seq.append(p)
+        v_seq.append(v)
+    if return_seq:
+        return v_seq, p_seq
+    return v, p
 
 #######################################################################
 #                              Helpers                                #
 #######################################################################
+
+# Given a list of intervals, return a list of constraints where each constraint is a tuple (i, j).
+def get_constraints(intervals):
+    n = len(intervals)
+    # tuples where LCB_i > UCB_j => i < j
+    constraints = [(i,j) for i in range(n) for j in range(n) if intervals[i][0] > intervals[j][1]]
+    return constraints
+
 
 def plot_intervals(intervals, order=None, x=None):
     if order is not None:
@@ -314,50 +251,6 @@ def plot_intervals(intervals, order=None, x=None):
 
     return ax
 
-# Swiss-NSF algorithm, given a list of intervals and a number k, return p vector
-def swiss_nsf(intervals, x, k):
-    # funding line is point estimate of the kth item
-    line = sorted(x, reverse=True)[k-1]
-
-    # intervals strictly above funding line
-    above = [i for i in range(len(intervals)) if intervals[i][0] > line]
-    # intervals strictly below funding line
-    below = [i for i in range(len(intervals)) if intervals[i][1] < line]
-    # intervals that overlap with funding line
-    overlap = [i for i in range(len(intervals)) if intervals[i][0] <= line <= intervals[i][1]]
-
-    k_rand = k - len(above)
-    if k_rand == 0:
-        return [1]*k + [0]*(len(intervals)-k)
-
-    p = [0]*len(intervals)
-    for i in above:
-        p[i] = 1
-    for i in below:
-        p[i] = 0
-    for i in overlap:
-        p[i] = 1. * k_rand / len(overlap)
-    return p
-
-# Given a choice of p vector, evaluate the worst case expected value of sampling according to p over rankings
-# consistent with ordering of intervals.
-def evaluate_p(intervals, p, T):
-    # sort intervals in decreasing order of LCB
-    ordering = np.argsort([i[0] for i in intervals])[::-1]
-    intervals = [intervals[i] for i in ordering]
-    p = [p[i] for i in ordering]
-    n = len(intervals)
-
-    v = T
-    for i in range(T):
-        # get the values of p for set of intervals that overlap with i 
-        S_i = [p[j] for j in range(i+1, n) if intervals[j][1] >= intervals[i][0]]  
-        if len(S_i) < T - i:
-            continue
-        v_i = sum(p[:i]) + sum(sorted(S_i)[:T-i])
-        if v_i < v:
-            v = v_i
-    return v
 
 # Generate all permutations of [0...(n-1)] satisfying sigma(i) < sigma(j) for all (i,j) in constraints
 def generate_constrained_permutations(n, constraints):
@@ -385,21 +278,6 @@ def generate_constrained_permutations(n, constraints):
     backtrack([])
     return result
 
-# Sort intervals by decreasing # of intervals they are strictly above, breaking ties by # of intervals they are strictly below
-def sort_intervals(intervals, return_AB=False):
-    n = len(intervals)
-    constraints = get_constraints(intervals)
-    A = [0]*len(intervals)
-    B = [0]*len(intervals)
-    for c in constraints:
-        A[c[0]] += 1 # num intervals that i is strictly above 
-        B[c[1]] += 1 # num intervals that i is strictly below
-    # sort 1 to n by decreasing A breaking ties with increasing B
-    order = sorted(range(n), key=lambda i: (-A[i], B[i]))
-    if return_AB:
-        return [intervals[i] for i in order], order, A, B
-    return [intervals[i] for i in order], order
-
 # Return permutations of indices tau, such that tau(i) = rank of i by x
 def get_order_by_x(x):
     tau_inv = np.argsort(x)[::-1]
@@ -407,37 +285,6 @@ def get_order_by_x(x):
     for i, t in enumerate(tau_inv):
         tau[t] = i
     return tau
-
-# Given a list of intervals, partition them into disjoint subsets such that all intervals in a subset are monotonically ordered.
-def partition_intervals(intervals, return_inds=False):
-    # Sort intervals by decreasing # of intervals they are strictly above, breaking ties by # of intervals they are strictly below
-    _, order, _, B = sort_intervals(intervals, return_AB=True)
-    B = [-b for b in B]
-    # Use a list to track the last B of each subset
-    subsets = []
-    # To track the actual subsets, we maintain a list of lists
-    actual_subsets = []
-    actual_subsets_ind = []
-    for j in order:
-        B_j = B[j]
-        # Find the first index in subsets where last_u >= u
-        idx = bisect.bisect_left(subsets, B_j)
-        if idx < len(subsets):
-            # Replace the subset's last u with current u
-            subsets[idx] = B_j
-            actual_subsets[idx].append(intervals[j])
-            actual_subsets_ind[idx].append(j)
-        else:
-            # Create a new subset
-            subsets.append(B_j)
-            actual_subsets.append([intervals[j]])
-            actual_subsets_ind.append([j])  
-    if return_inds:
-        # Return the indices of the intervals in the original order
-        return actual_subsets, actual_subsets_ind
-
-    # Return the actual subsets
-    return actual_subsets
 
 def generate_prefix_selections(sets, m):
     """
