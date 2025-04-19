@@ -114,7 +114,7 @@ def cutting_plane_optimization(intervals, k,
         total_cuts += len(cuts)
 
         if verbose and iter_num % print_iter == 0:
-            print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, v_LB= {v_val:.4f}.")
+            print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, v_UB= {v_val:.4f}.")
 
     if verbose:
         print(f"Max iterations reached ({max_iters}) without convergence.")
