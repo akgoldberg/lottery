@@ -2,6 +2,7 @@ import numpy as np
 import cvxpy as cp
 from helpers import get_symmetric_intervals, partition_intervals, prune_instance
 from cutting_plane import separation_oracle
+from full_LP import solve_instance_ordered
 import time
 
 import gurobipy as gp
@@ -34,7 +35,7 @@ def analytic_center(A, b, eps=1e-8, reg=0):
 
 def acppm_optimization(intervals, k,
                                 use_symmetry, add_monotonicity_constraints,
-                                max_iters, max_cuts_per_iter, oracle_tol, obj_tol, obj_bound_method,
+                                max_iters, max_cuts_per_iter, oracle_tol, obj_tol, obj_bound_method, drop_cut_limit, solve_initial_LB, solve_LP_iter,
                                 verbose, print_iter):   
     # Check that intervals given are sorted by left endpoint
     assert all(intervals[i][0] >= intervals[i+1][0] for i in range(len(intervals)-1)), "Intervals must be sorted by left endpoint."
@@ -45,6 +46,20 @@ def acppm_optimization(intervals, k,
     env.setParam('OutputFlag', 0)
     env.start()
     m = gp.Model(env=env)
+
+    step_start = time.time()
+    # (1) Set initial lower bound
+    if solve_initial_LB:
+        # get ordering of intervals by left endpoint
+        tau = sorted(range(len(intervals)), key=lambda i: -intervals[i][0])
+        v_LB,_ = solve_instance_ordered(intervals, k, k, tau, verbose=False, prune=True, postprocess=True)
+        if verbose:
+            print(f"Setting initial lower bound from solving ordered problem: {v_LB:.4f}.")
+    else:
+        v_LB = 0
+        if verbose:
+            print(f"Setting initial lower bound to 0.")
+    timing_info['initial_LB'] = time.time() - step_start
 
     # (A) Group all intervals with identical constraints to reduce number of decision vars
     step_start = time.time()
@@ -71,7 +86,7 @@ def acppm_optimization(intervals, k,
     m.addConstrs((p[i] >= 0 for i in range(n_vars)), name="p_prob0")
     m.addConstrs((p[i] <= 1 for i in range(n_vars)), name="p_prob1")
     m.addConstr(v <= k, name="v_UB0")
-    m.addConstr(v >= 0, name="v_LB")
+    m.addConstr(v >= v_LB, name="v_LB")
 
     # (B) Add monotonicity constraints
     step_start = time.time()
@@ -90,74 +105,130 @@ def acppm_optimization(intervals, k,
     timing_info['monotonicity_constraints_setup'] = time.time() - step_start
 
     total_cuts = 0
+    current_cuts = 0
+    feasibility_cuts = 0
+    objective_cuts = 0
     step_start = time.time()
 
     v_UB = k
-    v_LB = 0
     best_feasible = None
 
+    timing_info['analytic_center'] = 0
+    timing_info['drop_cut_limit'] = 0
+    timing_info['separation_oracle'] = 0
+    timing_info['LB_update'] = 0
+    timing_info['UB_update'] = 0
+
     for iter_num in range(max_iters):
-        A,b,v_LB_idx = extract_constraints(m)
-        
+        iter_start_time = time.time()
+
         # Solve the analytic center problem
+        step_start = time.time()
+        A, b, v_LB_idx = extract_constraints(m)
         x, slack = analytic_center(A, b, eps=1e-8)
+        timing_info['analytic_center'] += time.time() - step_start
+
         p_vars = x[1:]  # Exclude the first variable (v)
         p_vals = [p_vars[i_to_var[i]] for i in range(len(intervals))]
         v_val = x[0]  # The first variable is v
 
+        # Drop cuts if necessary
+        step_start = time.time()
+        if drop_cut_limit is not None:
+            max_total_cuts = drop_cut_limit * n_vars
+            if current_cuts > max_total_cuts:
+                w = 1.0 / (slack**2)
+                H = A.T.dot(A * w[:, None])
+                H_inv = np.linalg.inv(H)
+                HinvA_T = H_inv.dot(A.T)
+                quad = np.einsum('ij,ij->i', A, HinvA_T.T)
+                eta = slack / np.sqrt(quad)
+
+                etas = [eta[i] for i, c in enumerate(m.getConstrs()) if c.ConstrName == "cut"]
+                cutoff = sorted(etas)[max_total_cuts]
+                for i, c in enumerate(m.getConstrs()):
+                    if c.ConstrName == "cut" and etas[i] < cutoff:
+                        m.remove(c)
+                        current_cuts -= 1
+        timing_info['drop_cut_limit'] += time.time() - step_start
+
         # Separation oracle
+        step_start = time.time()
         cuts = separation_oracle(p_vals, v_val, intervals, k, oracle_tol, max_cuts_per_iter)
+        timing_info['separation_oracle'] += time.time() - step_start
 
         if len(cuts) == 0:
-            # if feasible solution found, update best feasible and add obj cut
+            # If feasible solution found, update best feasible and add obj cut
+            step_start = time.time()
             if v_val < v_LB:
                 raise ValueError(f"No convergence: v_LB = {v_LB} > v_val = {v_val}.")
             v_LB = v_val
             best_feasible = p_vals, v_val
-            # add objective cut (replace LB constraint with new one)
             m.getConstrByName("v_LB").RHS = v_LB
             total_cuts += 1
-        for C in cuts:
-            # if infeasible, add cuts
-            m.addConstr(v <= gp.quicksum(p[i_to_var[i]] for i in C))
-        
-        total_cuts += len(cuts)
+            objective_cuts += 1
+            timing_info['LB_update'] += time.time() - step_start
 
-        # Get upper bound estimate 
+        for C in cuts:
+            m.addConstr(v <= gp.quicksum(p[i_to_var[i]] for i in C), name="cut")
+
+        total_cuts += len(cuts)
+        current_cuts += len(cuts)
+        feasibility_cuts += len(cuts)
+
+        # Get upper bound estimate
+        step_start = time.time()
         if obj_bound_method == 'solve_LP':
             if len(cuts) > 0:
-                # Solve the LP relaxation with the current added cuts
                 m.optimize()
                 v_UB = v.X
+                # check feasibility
+                p_vars = [p[i].X for i in range(n_vars)]
+                p_vals = [p_vars[i_to_var[i]] for i in range(len(intervals))]
+                check = separation_oracle(p_vals, v_UB, intervals, k, oracle_tol, max_cuts_per_iter)
+                if len(check) == 0: # feasible so LB = UB = v_UB
+                    v_LB = v_UB
+                    best_feasible = p_vals, v_UB
         elif obj_bound_method == 'slack_vars':
-            # Use slack variables from analytic center solution to compute UB
-            slack_obj = slack[v_LB_idx]  # slack variable corresponding to v_LB
-            slack = np.delete(slack, v_LB_idx)  # get everything but v_LB_idx
+            slack_obj = slack[v_LB_idx]
+            slack = np.delete(slack, v_LB_idx)
             mu = slack_obj / slack
-            b_mult = np.delete(b, v_LB_idx)  # get everything but v_LB_idx
+            b_mult = np.delete(b, v_LB_idx)
             v_UB_new = b_mult.dot(mu) + obj_tol
             if v_UB_new < v_UB:
                 v_UB = v_UB_new
+            if solve_LP_iter is not None and iter_num > 0 and iter_num % solve_LP_iter == 0:
+                m.optimize()
+                v_UB = min(v_UB, v.X)
+                # check feasibility
+                p_vars = [p[i].X for i in range(n_vars)]
+                p_vals = [p_vars[i_to_var[i]] for i in range(len(intervals))]
+                check = separation_oracle(p_vals, v_UB, intervals, k, oracle_tol, max_cuts_per_iter)
+                if len(check) == 0: # feasible so LB = UB = v_UB
+                    v_LB = v_UB
+                    best_feasible = p_vals, v_UB
         else:
             raise ValueError(f"Unknown method for obtaining upper bound: {obj_bound_method}.")
+        timing_info['UB_update'] += time.time() - step_start
 
         # Check for convergence
         if v_UB - v_LB < obj_tol:
             timing_info['optimization_loop_time'] = time.time() - step_start
             if verbose:
-                print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, v_UB= {v_UB:.4f}, v_LB={v_LB:.4f}.")
+                print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, active cuts: {current_cuts}, v_UB= {v_UB:.4f}, v_LB={v_LB:.4f}.")
             p_vals, v_val = best_feasible
             return p_vals, v_val, {'iterations': iter_num + 1,
                                     'convergence': True,
                                     'total_cuts': total_cuts,
+                                    'feasibility_cuts': feasibility_cuts,
+                                    'objective_cuts': objective_cuts,
                                     'n_vars': n_vars,
                                     'n_chains': n_chains,
                                     'n_mono_constraints': n_mono_constraints,
                                     'timing': timing_info}
 
         if verbose and iter_num % print_iter == 0:
-            print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, v_UB= {v_UB:.4f}, v_LB={v_LB:.4f}.")
-
+            print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, active cuts: {current_cuts}, v_UB= {v_UB:.4f}, v_LB={v_LB:.4f}.")
     if verbose:
         print(f"Max iterations reached ({max_iters}) without convergence.")
     
@@ -166,14 +237,17 @@ def acppm_optimization(intervals, k,
     return p_vals, v_val, {'iterations': max_iters,
                             'convergence': False,
                             'total_cuts': total_cuts,
+                            'feasibility_cuts': feasibility_cuts,
+                            'objective_cuts': objective_cuts,
                             'n_vars': n_vars,
                             'n_chains': n_chains,
                             'n_mono_constraints': n_mono_constraints,
                             'timing': timing_info}
 
 def solve_problem(intervals, k, sort_by_left=True,
-                    init_prune=True, use_symmetry=True, add_monotonicity_constraints=True, upper_bound_method='solve_LP',
-                    max_iters=1000, oracle_tol=1e-6, obj_tol=1e-5, max_cuts_per_iter=None, print_iter=10, verbose=False):
+                    init_prune=True, use_symmetry=True, add_monotonicity_constraints=True, upper_bound_method='slack_vars',
+                    max_iters=1000, oracle_tol=1e-6, obj_tol=1e-5, max_cuts_per_iter=None, drop_cut_limit=None, solve_initial_LB=False, solve_LP_iter=None,
+                    print_iter=10, verbose=False):
     
     start_time = time.time()
     timing_info = {}
@@ -203,7 +277,7 @@ def solve_problem(intervals, k, sort_by_left=True,
     # (2) optimize using cutting plane method
     p_vals, v_val, info = acppm_optimization(intervals_pruned, k_pruned,
                                                         use_symmetry, add_monotonicity_constraints,
-                                                        max_iters, max_cuts_per_iter, oracle_tol, obj_tol, upper_bound_method,
+                                                        max_iters, max_cuts_per_iter, oracle_tol, obj_tol, upper_bound_method, drop_cut_limit, solve_initial_LB, solve_LP_iter,
                                                         verbose, print_iter)
 
     # (3) add pruned top and bottom intervals back to the solution with p=1 and p=0 respectively

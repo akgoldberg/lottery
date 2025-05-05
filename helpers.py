@@ -1,5 +1,6 @@
 import bisect
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Given a list of intervals and a number T, prune out intervals that are always in the top T or never in the top T.
 def prune_instance(intervals, T):
@@ -190,6 +191,60 @@ def swiss_nsf(intervals, x, k):
     for i in overlap:
         p[i] = 1. * k_rand / len(overlap)
     return p
+
+def plot_intervals(intervals, order=None, x=None,
+                    show_axes=True, plot_swiss_nsf=False,
+                    k=None, plot_algo=False, ax=None):
+    if order is not None:
+        intervals = [intervals[i] for i in order]
+    n = len(intervals)
+    if ax is None:
+        _, ax = plt.subplots()
+    for i, (a, b) in enumerate(intervals):
+        ax.plot([i, i], [a, b], 'k-')
+        ax.plot([i - 0.2, i + 0.2], [a, a], 'k-')  # Add horizontal bar at the lower bound
+        ax.plot([i - 0.2, i + 0.2], [b, b], 'k-')  # Add horizontal bar at the upper bound
+    
+    if x is not None:
+        # plot x values as dots
+        for i, x_i in enumerate(x):
+            ax.plot(i, x_i, 'o', color='darkblue', markersize=5)
+
+    if plot_swiss_nsf:
+        assert(x is not None), "x must be provided to plot swiss nsf"
+        assert(k is not None), "k must be provided to plot swiss nsf"
+        # plot swiss nsf line
+        line = sorted(x, reverse=True)[k-1]
+        ax.plot([-0.5, n-0.5], [line, line], '--', color='darkorange')
+
+    if plot_algo:
+        # plot algo line
+        accept_line = sorted(intervals, reverse=True, key=lambda I: I[1])[k][1]
+        reject_line = sorted(intervals, reverse=True, key=lambda I: I[0])[k-1][0]
+        ax.plot([-0.5, n-0.5], [accept_line, accept_line], '--', color='darkgreen')
+        ax.plot([-0.5, n-0.5], [reject_line, reject_line], '--', color='darkred')
+
+    if show_axes:
+        # smart x ticks so that not too crowded
+        if n > 10:
+            step = max(1, n // 10)
+            # round step to closest multiple of 5
+            step = 5 * max(round(step/5), 1)
+            ax.set_xticks(range(0, n, step))
+            ax.set_xticklabels([f'{i}' for i in range(0, n, step)])
+        else:
+            ax.set_xticks(range(n))
+            ax.set_xticklabels([f'{i}' for i in range(n)])
+        ax.set_xlabel('Interval')
+        ax.set_ylabel('Value')
+
+    else:
+        ax.set_xticks([])  # Remove x ticks
+        ax.set_xticklabels([])  # Remove x tick labels
+        ax.set_yticks([])  # Remove y ticks
+        ax.set_yticklabels([])  # Remove y tick labels
+
+    return ax
 
 #######################################################################
 #                           Verify Axioms                             #

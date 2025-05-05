@@ -7,4 +7,3 @@
 > docker build -t er-research .     
 > docker run -it er-research
 > Run R script reproduce_results.r from inside docker bash shell
-> 

@@ -27,8 +27,8 @@ def separation_oracle(p_vals, v_val, intervals, k, tol=1e-6, max_cuts_per_iter=N
 
 def cutting_plane_optimization(intervals, k,
                                 use_symmetry, add_monotonicity_constraints,
-                                max_iters, max_cuts_per_iter, tol,
-                                verbose, print_iter):   
+                                max_iters, max_cuts_per_iter, tol, drop_cut_limit,
+                                verbose, print_iter, ):   
     # Check that intervals given are sorted by left endpoint
     assert all(intervals[i][0] >= intervals[i+1][0] for i in range(len(intervals)-1)), "Intervals must be sorted by left endpoint."
 
@@ -82,10 +82,20 @@ def cutting_plane_optimization(intervals, k,
     timing_info['monotonicity_constraints_setup'] = time.time() - step_start
 
     total_cuts = 0
+    current_cuts = 0
     step_start = time.time()
     for iter_num in range(max_iters):
         m.optimize()
 
+        if (drop_cut_limit is not None) and (current_cuts > drop_cut_limit*n_vars):
+            # only keep cut constraints with drop_cut_limit * n_vars smallest slack values
+            cut_slacks = [c.Slack for c in m.getConstrs() if c.ConstrName == "cut"]
+            cutoff = sorted(cut_slacks)[drop_cut_limit*n_vars]
+            for c in m.getConstrs():
+                if c.ConstrName == "cut" and c.Slack > cutoff:
+                    m.remove(c)
+                    current_cuts -= 1
+                    
         if m.status != GRB.OPTIMAL:
             raise ValueError("Problem is infeasible or unbounded")
 
@@ -100,7 +110,7 @@ def cutting_plane_optimization(intervals, k,
         if len(cuts) == 0:
             timing_info['optimization_loop_time'] = time.time() - step_start
             if verbose:
-                print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, v_UB= {v_val:.4f}.")
+                print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, current_cuts: {current_cuts}, v_UB= {v_val:.4f}.")
             return p_vals, v_val, {'iterations': iter_num + 1,
                                     'convergence': True,
                                     'total_cuts': total_cuts,
@@ -110,11 +120,12 @@ def cutting_plane_optimization(intervals, k,
                                     'timing': timing_info}
         
         for C in cuts:
-            m.addConstr(v <= gp.quicksum(p[i_to_var[i]] for i in C))
+            m.addConstr(v <= gp.quicksum(p[i_to_var[i]] for i in C), name="cut")
         total_cuts += len(cuts)
+        current_cuts += len(cuts)
 
         if verbose and iter_num % print_iter == 0:
-            print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, v_UB= {v_val:.4f}.")
+            print(f"Iteration {iter_num}: Added {len(cuts)} constraints, total cuts: {total_cuts}, current_cuts: {current_cuts}, v_UB= {v_val:.4f}.")
 
     if verbose:
         print(f"Max iterations reached ({max_iters}) without convergence.")
@@ -131,14 +142,18 @@ def cutting_plane_optimization(intervals, k,
 
 def solve_problem(intervals, k, sort_by_left=True,
                     init_prune=True, use_symmetry=True, add_monotonicity_constraints=True, 
-                    max_iters=1000, tol=1e-6, max_cuts_per_iter=None, print_iter=10, verbose=False):
+                    max_iters=1000, tol=1e-6, max_cuts_per_iter=None, drop_cut_limit=3, print_iter=10, verbose=False):
+    
+    assert(k < len(intervals)), "k must be less than the number of intervals."
+    assert(k >= 0), "k must be greater than or equal to 0."
     
     start_time = time.time()
     timing_info = {}
 
     if sort_by_left:
-        intervals = sorted(intervals, key=lambda x: x[0], reverse=True)
-    
+        order = np.argsort([-x[0] for x in intervals])
+        intervals = [intervals[i] for i in order]
+
     step_time = time.time()
     # (1) prune all intervals that are always in the top k or never in the top k
     if init_prune: 
@@ -155,15 +170,28 @@ def solve_problem(intervals, k, sort_by_left=True,
         if verbose:
             print(f'Not pruning the LP as a first step.')
     if k_pruned <= 0:
-        return k, [1]*k + [0]*(len(intervals)-k)
+        info = {'iterations': 0,
+                'convergence': True,
+                'total_cuts': 0,
+                'n_vars': len(intervals),
+                'n_chains': None,
+                'n_mono_constraints': 0,
+                'timing': timing_info}
+        p_out = [1]*k + [0]*(len(intervals)-k)
+        v_out = k
+
+        if sort_by_left:
+            p_out = [p_out[i] for i in np.argsort(order)]
+
+        return np.array(p_out), v_out, info
     timing_info['init_prune_time'] = time.time() - step_time
 
     # (2) optimize using cutting plane method
     p_vals, v_val, info = cutting_plane_optimization(intervals_pruned, k_pruned,
                                                         use_symmetry, add_monotonicity_constraints,
-                                                        max_iters, max_cuts_per_iter, tol,
+                                                        max_iters, max_cuts_per_iter, tol, drop_cut_limit,
                                                         verbose, print_iter)
-
+    
     # (3) add pruned top and bottom intervals back to the solution with p=1 and p=0 respectively
     v_out = v_val + len(top)
     p_out = np.zeros(len(intervals))
@@ -180,5 +208,10 @@ def solve_problem(intervals, k, sort_by_left=True,
     # add timing to the info dict
     info['timing']['total_time'] = time.time() - start_time
     info['timing']['init_prune_time'] = timing_info['init_prune_time']
+
+    # re-order p_out to original order
+    if sort_by_left:
+        p_out = [p_out[i] for i in np.argsort(order)]
+        p_out = np.array(p_out)
 
     return p_out, v_out, info

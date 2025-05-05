@@ -52,9 +52,20 @@ def load_neurips_minmax(PATH='ConferenceReviewData/neurips2024_data/neurips2024_
 
     return x, intervals, decisions
 
+def load_neurips_gaussian_model(PATH='ConferenceReviewData/neurips2024_data/neurips2024_gaussian_intervals.csv'):
+   df = pd.read_csv(PATH)
+   x = df['theta_mean']
+   intervals50 = list(zip(df['theta_lower50'], df['theta_upper50']))
+   intervals95 = list(zip(df['theta_lower95'], df['theta_upper95']))
+   decision = df['decision']
+
+   return x, intervals50, intervals95, decision
+
 ###########################################################################
 ######                 Generate Random Intervals                     ######
 ###########################################################################
+
+# Note: in both cases changing M does not change the distribution of number of chains only the scale of the intervals, which can be useful for plotting
 
 # generate n random intervals with endpoints sampled uniformly from [0, M]
 def generate_uniform_intervals(n, M=10):
@@ -68,12 +79,21 @@ def generate_uniform_intervals(n, M=10):
     return intervals
 
 # generate n random intervals by sampling n values of sigma Unif(0, m), n values of mu from N(0, sigma_i) and constructing 95% CI around each x_i
-def generate_gaussian_intervals(n, m = 3):
+def generate_gaussian_intervals(n, M = 1, w = 1.96):
     intervals = []
     for _ in range(n):
-        sigma = m*np.random.rand()
+        sigma = M*np.random.rand()
         mu = np.random.normal(0, sigma)
-        a = np.round(mu - 1.96*sigma, 5)
-        b = np.round(mu + 1.96*sigma, 5)
+        a = np.round(mu - w*sigma, 5)
+        b = np.round(mu + w*sigma, 5)
+        intervals.append((a,b))
+    return intervals
+
+def generate_fixedwidth_intervals(n, width, M=10):
+    intervals = []
+    for _ in range(n):
+        x = np.round(M*np.random.rand(), 3)
+        a = np.round(x - width/2, 5)
+        b = np.round(x + width/2, 5)
         intervals.append((a,b))
     return intervals
