@@ -1,7 +1,7 @@
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
-from helpers import prune_instance, partition_intervals, get_symmetric_intervals
+from helpers import prune_instance, partition_intervals, get_symmetric_intervals, verify_monotonicity_in_k
 import time
 
 def separation_oracle(p_vals, v_val, intervals, k, tol=1e-6, max_cuts_per_iter=None):
@@ -25,10 +25,10 @@ def separation_oracle(p_vals, v_val, intervals, k, tol=1e-6, max_cuts_per_iter=N
     cuts = [C for C, _ in C_w]
     return cuts
 
-def cutting_plane_optimization(intervals, k,
+def cutting_plane_optimization(intervals, k, p_lower_bound,
                                 use_symmetry, add_monotonicity_constraints,
                                 max_iters, max_cuts_per_iter, tol, drop_cut_limit,
-                                verbose, print_iter, ):   
+                                verbose, print_iter):   
     # Check that intervals given are sorted by left endpoint
     assert all(intervals[i][0] >= intervals[i+1][0] for i in range(len(intervals)-1)), "Intervals must be sorted by left endpoint."
 
@@ -61,7 +61,7 @@ def cutting_plane_optimization(intervals, k,
 
     m.setObjective(v, GRB.MAXIMIZE)
     m.addConstr(gp.quicksum(p[i_to_var[i]] for i in range(len(intervals))) == k, name="sum_p")
-    m.addConstrs((p[i] >= 0 for i in range(n_vars)), name="p_prob0")
+    m.addConstrs((p[i_to_var[i]] >= p_lower_bound[i] for i in range(len(intervals))), name="p_LB")
     m.addConstrs((p[i] <= 1 for i in range(n_vars)), name="p_prob1")
     m.addConstr(v <= gp.quicksum(p[i_to_var[j]] for j in range(k)), name="topk_constraint")
 
@@ -140,7 +140,7 @@ def cutting_plane_optimization(intervals, k,
                             'n_mono_constraints': n_mono_constraints,
                             'timing': timing_info}
 
-def solve_problem(intervals, k, sort_by_left=True,
+def solve_problem(intervals, k, set_p_lower_bound=None, sort_by_left=True,
                     init_prune=True, use_symmetry=True, add_monotonicity_constraints=True, 
                     max_iters=1000, tol=1e-6, max_cuts_per_iter=None, drop_cut_limit=3, print_iter=10, verbose=False):
     
@@ -150,16 +150,24 @@ def solve_problem(intervals, k, sort_by_left=True,
     start_time = time.time()
     timing_info = {}
 
+    if set_p_lower_bound is None:
+        p_lower_bound = [0]*len(intervals)
+    else:
+        p_lower_bound = set_p_lower_bound
+        init_prune = False # Do not prune if solving monotonic sequence
+
     if sort_by_left:
         order = np.argsort([-x[0] for x in intervals])
         intervals = [intervals[i] for i in order]
+        p_lower_bound = [p_lower_bound[i] for i in order]
 
     step_time = time.time()
     # (1) prune all intervals that are always in the top k or never in the top k
     if init_prune: 
-        indices_pruned, top, bottom = prune_instance(intervals, k)
+        indices_pruned, top, _ = prune_instance(intervals, k)
         intervals_pruned = [intervals[i] for i in indices_pruned]
         k_pruned = k - len(top)
+        p_lower_bound_pruned = [p_lower_bound[i] for i in indices_pruned]
 
         if verbose:
             print(f'Pruned {len(intervals)-len(intervals_pruned)} intervals. Solving with n={len(intervals_pruned)}, k={k_pruned}.')
@@ -167,6 +175,7 @@ def solve_problem(intervals, k, sort_by_left=True,
         indices_pruned, top = list(range(len(intervals))), []
         intervals_pruned = intervals
         k_pruned = k
+        p_lower_bound_pruned = p_lower_bound
         if verbose:
             print(f'Not pruning the LP as a first step.')
     if k_pruned <= 0:
@@ -187,7 +196,7 @@ def solve_problem(intervals, k, sort_by_left=True,
     timing_info['init_prune_time'] = time.time() - step_time
 
     # (2) optimize using cutting plane method
-    p_vals, v_val, info = cutting_plane_optimization(intervals_pruned, k_pruned,
+    p_vals, v_val, info = cutting_plane_optimization(intervals_pruned, k_pruned, p_lower_bound_pruned,
                                                         use_symmetry, add_monotonicity_constraints,
                                                         max_iters, max_cuts_per_iter, tol, drop_cut_limit,
                                                         verbose, print_iter)
@@ -200,11 +209,6 @@ def solve_problem(intervals, k, sort_by_left=True,
     p_out[top] = 1.
     p_out = np.clip(p_out, 0, 1)
 
-    # add meta data on pruning to the info dict
-    info['n_top'] = len(top)
-    info['n_bottom'] = len(bottom)
-    info['n_rand'] = len(intervals_pruned)
-
     # add timing to the info dict
     info['timing']['total_time'] = time.time() - start_time
     info['timing']['init_prune_time'] = timing_info['init_prune_time']
@@ -215,3 +219,29 @@ def solve_problem(intervals, k, sort_by_left=True,
         p_out = np.array(p_out)
 
     return p_out, v_out, info
+
+def solve_with_monotonicity(intervals, k, max_iters=1000, max_cuts_per_iter=None, drop_cut_limit=3,
+                                print_iter=10, verbose=False, check_monotonicity=True):
+    
+    p_seq = []
+    v_seq = []
+    info_seq = []
+    
+    p_lower_bound = [0]*len(intervals)
+    for i in range(1,k+1):
+        print('Solving with n_selected =', i)  
+        # solve with n_selected = i
+        p,v,info  = solve_problem(intervals, i, set_p_lower_bound=p_lower_bound,
+                                    sort_by_left=True, init_prune=False, use_symmetry=True,
+                                    add_monotonicity_constraints=True,
+                                    max_iters=max_iters, tol=1e-6, max_cuts_per_iter=max_cuts_per_iter,
+                                    drop_cut_limit=drop_cut_limit, print_iter=print_iter, verbose=verbose)
+        p_lower_bound = p
+        p_seq.append(p)
+        v_seq.append(v)
+        info_seq.append(info)
+    
+    if check_monotonicity:
+        verify_monotonicity_in_k(p_seq, raise_error=True)
+    
+    return p_seq, v_seq, info_seq

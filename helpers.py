@@ -33,7 +33,6 @@ def prune_instance(intervals, T):
     top = [i for i in range(n) if B[i] >= n - T]
     bottom = [i for i in range(n) if A[i] >= T]
     
-    # Prune the intervals, keeping those not in top or bottom
     pruned_intervals = [i for i in range(n) if i not in top and i not in bottom]
     
     return pruned_intervals, top, bottom
@@ -192,8 +191,16 @@ def swiss_nsf(intervals, x, k):
         p[i] = 1. * k_rand / len(overlap)
     return p
 
+def top_k(x, k):
+    # return 0-1 vector of top k largest items in x
+    inds = np.argsort(x)[::-1][:k]
+    p = np.zeros(len(x))
+    for i in inds:
+        p[i] = 1
+    return p
+
 def plot_intervals(intervals, order=None, x=None,
-                    show_axes=True, plot_swiss_nsf=False,
+                    show_axes=True, hide_y=False, plot_swiss_nsf=False,
                     k=None, plot_algo=False, ax=None):
     if order is not None:
         intervals = [intervals[i] for i in order]
@@ -213,9 +220,18 @@ def plot_intervals(intervals, order=None, x=None,
     if plot_swiss_nsf:
         assert(x is not None), "x must be provided to plot swiss nsf"
         assert(k is not None), "k must be provided to plot swiss nsf"
-        # plot swiss nsf line
-        line = sorted(x, reverse=True)[k-1]
-        ax.plot([-0.5, n-0.5], [line, line], '--', color='darkorange')
+
+        # check if k is list
+        if isinstance(k, list):
+            colors = ['darkorange', 'darkgreen', 'darkblue']
+            # plot all k lines
+            for i, k_i in enumerate(k):
+                line = sorted(x, reverse=True)[k_i-1]
+                ax.plot([-0.5, n-0.5], [line, line], '--', color=colors[i % len(colors)])
+        else:
+            # plot swiss nsf line
+            line = sorted(x, reverse=True)[k-1]
+            ax.plot([-0.5, n-0.5], [line, line], '--', color='darkorange')
 
     if plot_algo:
         # plot algo line
@@ -231,12 +247,15 @@ def plot_intervals(intervals, order=None, x=None,
             # round step to closest multiple of 5
             step = 5 * max(round(step/5), 1)
             ax.set_xticks(range(0, n, step))
-            ax.set_xticklabels([f'{i}' for i in range(0, n, step)])
+            ax.set_xticklabels([f'{i+1}' for i in range(0, n, step)])
         else:
             ax.set_xticks(range(n))
-            ax.set_xticklabels([f'{i}' for i in range(n)])
-        ax.set_xlabel('Interval')
-        ax.set_ylabel('Value')
+            ax.set_xticklabels([f'{i+1}' for i in range(n)], fontsize=14)
+        if hide_y:
+            ax.set_yticks([])
+        else:
+            ax.set_xlabel('Interval')
+            ax.set_ylabel('Score')
 
     else:
         ax.set_xticks([])  # Remove x ticks

@@ -61,6 +61,43 @@ def load_neurips_gaussian_model(PATH='ConferenceReviewData/neurips2024_data/neur
 
    return x, intervals50, intervals95, decision
 
+def load_iclr_leaveoneout(PATH='ConferenceReviewData/iclr2025_data/iclr2025_reviews.csv', drop_withdrawn=True):
+    df = pd.read_csv(PATH)
+    if drop_withdrawn:
+        df = df[df.decision != 'Withdrawn'].reset_index(drop=True) # remove withdrawn papers
+    ratings = df.groupby('paper_id').agg({'rating': list, 'decision': 'max'}).reset_index()
+    # make all decisions Accept or Reject
+    ratings['decision'] = ratings['decision'].replace({'Accept (Poster)': 'Accept', 'Accept (Oral)': 'Accept', 'Accept (Spotlight)': 'Accept'})
+
+    def get_interval(lst):
+        means = []
+        for i in range(len(lst)):
+            temp_lst = lst[:i] + lst[i+1:]
+            mean = 1. * sum(temp_lst) / len(temp_lst)
+            means.append(mean)
+        return min(means), max(means)
+    
+    intervals = ratings['rating'].apply(get_interval)
+    x = ratings['rating'].apply(np.mean)
+    decision = ratings['decision']
+
+    return x, intervals, decision
+
+def load_iclr_gaussian_model(PATH='ConferenceReviewData/iclr2025_data/iclr2025_gaussian_intervals.csv', drop_withdrawn=True):
+    df = pd.read_csv(PATH)
+
+    if drop_withdrawn:
+        df = df[df.decision != 'Withdrawn'].reset_index(drop=True) # remove withdrawn papers
+
+    df['decision'] = df['decision'].replace({'Accept (Poster)': 'Accept', 'Accept (Oral)': 'Accept', 'Accept (Spotlight)': 'Accept'})
+
+    x = df['theta_mean']
+    intervals50 = list(zip(df['theta_lower50'], df['theta_upper50']))
+    intervals95 = list(zip(df['theta_lower95'], df['theta_upper95']))
+    decision = df['decision']
+
+    return x, intervals50, intervals95, decision
+
 ###########################################################################
 ######                 Generate Random Intervals                     ######
 ###########################################################################
@@ -96,4 +133,4 @@ def generate_fixedwidth_intervals(n, width, M=10):
         a = np.round(x - width/2, 5)
         b = np.round(x + width/2, 5)
         intervals.append((a,b))
-    return intervals
+    return sorted(intervals, reverse=True) # sort by left endpoint

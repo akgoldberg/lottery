@@ -7,3 +7,7 @@
 > docker build -t er-research .     
 > docker run -it er-research
 > Run R script reproduce_results.r from inside docker bash shell
+
+# To use RStudio server 
+> Run docker run -d --name er-research -e PASSWORD=yourpassword -p 8787:8787 er-research
+> Visit localhost:8787
