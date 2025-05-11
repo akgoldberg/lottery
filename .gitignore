@@ -31,5 +31,4 @@ build/
 *individual_votes.xlsx
 *.RData
 *.png 
-*.csv
 res/
