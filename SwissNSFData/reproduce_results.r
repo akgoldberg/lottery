@@ -59,6 +59,9 @@ mint_sections <- mint_section1 %>%
   bind_rows(mint_section4%>% 
               mutate(proposal = paste0(proposal, "_4")))
 
+# Save mint_sections to a file as a csv
+write.csv(mint_sections, "mint_sections.csv", row.names = FALSE)
+
 ##### How many projects can still be funded? ####
 how_many_fundable <- c(7, 4, 7, 8, 6)
 names(how_many_fundable) <- c("hss_s", "hss_h", "ls_m", "ls_b", "stem")

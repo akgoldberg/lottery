@@ -19,6 +19,17 @@ def load_swiss_nsf(PATH='SwissNSFData/intervals.csv'):
 
     return x, intervals, intervals90, half_intervals, half_intervals90
 
+def load_swiss_manski(PATH='SwissNSFData/manski_intervals.csv'):
+    df = pd.read_csv(PATH)
+    df.sort_values(by='median', ascending=False, inplace=True) 
+    df.reset_index(drop=True, inplace=True)
+    n = df.shape[0]
+    intervals = list(zip(df['lower'], df['upper'])) 
+    x = list(df['median'])
+
+    return x, intervals
+
+
 def load_neurips_leaveoneout(PATH='ConferenceReviewData/neurips2024_data/neurips2024_reviews.csv'):
     df = pd.read_csv(PATH)
     df = df[df.decision != 'Reject'].reset_index(drop=True)
@@ -61,10 +72,24 @@ def load_neurips_gaussian_model(PATH='ConferenceReviewData/neurips2024_data/neur
 
    return x, intervals50, intervals95, decision
 
-def load_iclr_leaveoneout(PATH='ConferenceReviewData/iclr2025_data/iclr2025_reviews.csv', drop_withdrawn=True):
+def load_neurips_subjectivity_intervals(PATH='ConferenceReviewData/neurips2024_data/neurips2024_subjectivity_intervals.csv'):
+    df = pd.read_csv(PATH)
+    df = df[df.decision != 'Reject'].reset_index(drop=True)
+    x = df['rating']
+    intervals = df['subjectivity_interval']
+    intervals = [tuple(map(float, i[1:-1].split(','))) for i in intervals]
+    decision = df['decision']
+    # rename Accept (poster) to Poster and Accept (oral) or Accept (spotlight) to Spotlight/Oral
+    decision = decision.replace({'Accept (poster)': 'Poster', 'Accept (oral)': 'Spotlight/Oral', 'Accept (spotlight)': 'Spotlight/Oral'})
+    return x, intervals, decision
+
+def load_iclr_leaveoneout(PATH='ConferenceReviewData/iclr2025_data/iclr2025_reviews.csv', drop_withdrawn=False):
     df = pd.read_csv(PATH)
     if drop_withdrawn:
         df = df[df.decision != 'Withdrawn'].reset_index(drop=True) # remove withdrawn papers
+    else:
+        # rename Withdrawn to Reject
+        df['decision'] = df['decision'].replace({'Withdrawn': 'Reject'})
     ratings = df.groupby('paper_id').agg({'rating': list, 'decision': 'max'}).reset_index()
     # make all decisions Accept or Reject
     ratings['decision'] = ratings['decision'].replace({'Accept (Poster)': 'Accept', 'Accept (Oral)': 'Accept', 'Accept (Spotlight)': 'Accept'})
@@ -83,11 +108,15 @@ def load_iclr_leaveoneout(PATH='ConferenceReviewData/iclr2025_data/iclr2025_revi
 
     return x, intervals, decision
 
-def load_iclr_gaussian_model(PATH='ConferenceReviewData/iclr2025_data/iclr2025_gaussian_intervals.csv', drop_withdrawn=True):
+def load_iclr_gaussian_model(PATH='ConferenceReviewData/iclr2025_data/iclr2025_gaussian_intervals.csv', drop_withdrawn=False):
     df = pd.read_csv(PATH)
 
     if drop_withdrawn:
         df = df[df.decision != 'Withdrawn'].reset_index(drop=True) # remove withdrawn papers
+    else:
+        # rename Withdrawn to Reject
+        df['decision'] = df['decision'].replace({'Withdrawn': 'Reject'})
+
 
     df['decision'] = df['decision'].replace({'Accept (Poster)': 'Accept', 'Accept (Oral)': 'Accept', 'Accept (Spotlight)': 'Accept'})
 
@@ -97,6 +126,22 @@ def load_iclr_gaussian_model(PATH='ConferenceReviewData/iclr2025_data/iclr2025_g
     decision = df['decision']
 
     return x, intervals50, intervals95, decision
+
+def load_iclr_subjectivity_intervals(PATH='ConferenceReviewData/iclr2025_data/iclr2025_subjectivity_intervals.csv', drop_withdrawn=False):
+    df = pd.read_csv(PATH)
+    if drop_withdrawn:
+        df = df[df.decision != 'Withdrawn'].reset_index(drop=True) # remove withdrawn papers
+    else:
+        # rename Withdrawn to Reject
+        df['decision'] = df['decision'].replace({'Withdrawn': 'Reject'})
+
+    df['decision'] = df['decision'].replace({'Accept (Poster)': 'Accept', 'Accept (Oral)': 'Accept', 'Accept (Spotlight)': 'Accept'})
+    x = df['rating']
+    intervals = df['subjectivity_interval']
+    intervals = [tuple(map(float, i[1:-1].split(','))) for i in intervals]
+    decision = df['decision']
+    # rename Accept (poster) to Poster and Accept (oral) or Accept (spotlight) to Spotlight/Oral
+    return x, intervals, decision
 
 ###########################################################################
 ######                 Generate Random Intervals                     ######

@@ -179,9 +179,7 @@ def swiss_nsf(intervals, x, k):
     overlap = [i for i in range(len(intervals)) if intervals[i][0] <= line <= intervals[i][1]]
 
     k_rand = k - len(above)
-    if k_rand == 0:
-        return [1]*k + [0]*(len(intervals)-k)
-
+    
     p = [0]*len(intervals)
     for i in above:
         p[i] = 1
@@ -295,7 +293,7 @@ def verify_posthoc_validity(intervals, p, raise_error=False):
         print('Valid solution: p is post-hoc valid.')
     return True
 
-def verify_monotonicity_in_k(pseq, raise_error=False):
+def verify_monotonicity_in_k(pseq, raise_error=False, print_out=True):
     """
     Verify that the sequence of p vectors is monotonic in k.
     This means that for each i, p[i] >= p[i-1] for all i.
@@ -308,7 +306,10 @@ def verify_monotonicity_in_k(pseq, raise_error=False):
              if not (p[j] >= p_lower_bound[j] or np.isclose(p[j], p_lower_bound[j], atol=0.002)):
                 if raise_error:
                     raise(f"p is not monotonic for k={i} p({j})={round(p[j],3)} and (k-1)={i-1}, p({j})={round(p_lower_bound[j],3)}.")
-                return False
+                if print_out:
+                    print(f"p is not monotonic for k={i} p({j})={round(p[j],3)} and (k-1)={i-1}, p({j})={round(p_lower_bound[j],3)}.")
+                else:
+                    return False
 
     # If we reach here, the solution is valid
     if raise_error:

@@ -8,7 +8,6 @@ import time
 import gurobipy as gp
 from gurobipy import GRB
 
-
 def analytic_center(A, b, eps=1e-8, reg=0):
     _, n = A.shape
     x = cp.Variable(n)
