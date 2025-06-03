@@ -1,5 +1,5 @@
 from generate_intervals import *
-from cutting_plane import solve_problem, solve_with_monotonicity
+from merit import solve_problem, solve_with_monotonicity
 from helpers import swiss_nsf, top_k
 import time 
 import json

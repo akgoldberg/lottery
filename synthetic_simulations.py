@@ -4,7 +4,7 @@ import GPy
 import time 
 from scipy.stats import pareto
 
-from cutting_plane import solve_problem
+from merit import solve_problem
 from helpers import swiss_nsf, top_k
 import os
 
