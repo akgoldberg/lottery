@@ -170,48 +170,6 @@ def generate_pareto_miscalibration_data(
 
     return assignment, theta, scores
 
-def generate_riskybias_data(n_items,
-                            n_reviewers,
-                            items_per_rev,
-                            sigma_theta,
-                            sigma_b, 
-                            sigma_err, 
-                            risky_bias, 
-                            prob_biased,
-                            risky_threshold=7.5, 
-                            score_range=(1, 10)):
-    """
-    Generate data with bias against risky proposals.
-
-    For items with quality above risky_threshold, reviewers are biased to give lower scores with probability prob_biased.
-    """
-    # sample true qualities
-    theta = np.random.normal(
-            loc=(score_range[1] + score_range[0]) / 2.0, scale=sigma_theta, size=(n_items,1)
-        )
-
-    if sigma_b is not None:
-        # sample linear miscalibration offsets
-        b = np.random.normal(0.0, sigma_b, size=n_reviewers)
-    else:
-        b = np.zeros(n_reviewers)
-
-    assignment = generate_random_assignment(n_items, n_reviewers, items_per_rev)
-
-    err = np.random.normal(0.0, sigma_err, size=assignment.shape)
-    scores = (theta + err) + b  # shape (n_items, n_reviewers)
-    # apply risky bias
-    for r in range(n_reviewers):
-        for i in range(n_items):
-            if theta[i] > risky_threshold and np.random.rand() < prob_biased:
-                scores[i, r] -= risky_bias  # apply bias
-    scores = np.clip(np.round(scores), *score_range)
-
-    y = np.full_like(scores, np.nan)
-    y[assignment == 1] = scores[assignment == 1]
-
-    return assignment, theta.squeeze(), y
-
 def fit_linear_miscalibration_model(A, y):
     ### Bayesian model from Ge et al.
 
@@ -275,7 +233,7 @@ def fit_linear_miscalibration_model(A, y):
     return expected_rank, intervals50, intervals95, est_params
 
 
-def run_simulation(n_items, n_reviewers, items_per_rev, error_params, error_type, ks, n_trials=10):
+def run_miscalibration_simulation(n_items, n_reviewers, items_per_rev, error_params, error_type, ks, n_trials=10):
     results = []
     for iter in range(n_trials):
         print(f"Running iteration {iter + 1}/{n_trials}...")
@@ -297,16 +255,6 @@ def run_simulation(n_items, n_reviewers, items_per_rev, error_params, error_type
 
             A, theta, y = generate_arbitrary_miscalibration_data(
                 n_items, n_reviewers, items_per_rev, sigma_theta, sigma_err, pct_arbitrary, sigma_b, n_threshold)
-        elif error_type == 'riskybias':
-            sigma_theta = error_params['sigma_theta']
-            sigma_b = error_params['sigma_b']
-            sigma_err = error_params['sigma_err']
-            risky_bias = error_params['risky_bias']
-            prob_biased = error_params['prob_biased']
-            risky_threshold = error_params['risky_threshold']
-
-            A, theta, y = generate_riskybias_data(
-                n_items, n_reviewers, items_per_rev, sigma_theta, sigma_b, sigma_err, risky_bias, prob_biased, risky_threshold)
         elif error_type == 'pareto':
             pareto_shape = error_params['pareto_shape']
             miscal_range = error_params['miscal_range']
@@ -348,6 +296,10 @@ def run_simulation(n_items, n_reviewers, items_per_rev, error_params, error_type
             prec_merit = np.dot(p_top_k, p_merit) / k
             prec_swiss = np.dot(p_top_k, p_swiss) / k
 
+            # save % randomized (p > 0 and p < 1)
+            n_rand_swiss = np.sum((p_swiss > 0) & (p_swiss < 1))
+            n_rand_merit = np.sum((p_merit > 0) & (p_merit < 1))
+
             if prec_merit - prec_swiss >= 0.1:
                 print(f"Interesting: Merit and Swiss methods differ by more than 0.1 in precision for k={k} in iteration {iter + 1}")
                 # save intervals and probabilities to a file
@@ -366,6 +318,7 @@ def run_simulation(n_items, n_reviewers, items_per_rev, error_params, error_type
             results.append([
                 iter, n_reviewers, n_items, items_per_rev, error_type,
                 k, intervals50_width, est_params,
+                n_rand_swiss, n_rand_merit,
                 # p_top_k, p_er_deterministic, p_raw_deterministic, p_raw_deterministic_median, p_merit, p_swiss,
                 p_quality_er_deterministic, p_quality_raw_deterministic, p_quality_raw_deterministic_median, p_quality_merit, p_quality_swiss, 
                 prec_er_deterministic, prec_raw_deterministic, prec_raw_deterministic_median, prec_merit, prec_swiss
@@ -374,6 +327,7 @@ def run_simulation(n_items, n_reviewers, items_per_rev, error_params, error_type
     d = pd.DataFrame(results, columns=[
         'iter', 'n_reviewers', 'n_items', 'items_per_rev', 'error_type',
         'k', 'er_interval_mean_width', 'estimated_params',
+        'n_rand_swiss', 'n_rand_merit',
         # 'p_top_k', 'p_er_deterministic', 'p_raw_deterministic', 'p_raw_deterministic_median', 'p_merit', 'p_swiss',
         'prec_quality_er_deterministic', 'prec_quality_raw_deterministic', 'prec_quality_raw_deterministic_median', 'prec_quality_merit', 'prec_quality_swiss',
         'prec_er_deterministic', 'prec_raw_deterministic', 'prec_raw_deterministic_median', 'prec_merit', 'prec_swiss'
@@ -384,29 +338,97 @@ def run_simulation(n_items, n_reviewers, items_per_rev, error_params, error_type
         d[key] = value
     return d
 
-if __name__ == "__main__":
+def simulate_risky_bias(n_reviewers, n_items, items_per_rev, k, model_params, score_range=(1,10)):
+    alpha = model_params['alpha']
+    p_bias = model_params['p_bias']
+    sigma_err = model_params['sigma_err']
+
+    A = generate_random_assignment(n_items, n_reviewers, items_per_rev)
+    theta = pareto.rvs(alpha, size=n_items)
+    risky_bias = np.random.choice([0, 1], size=n_reviewers, p=[1-p_bias, p_bias])
+
+    # Broadcast theta[i] to assigned (i, j) pairs
+    item_idx, reviewer_idx = np.where(A == 1)
+    n_obs = len(item_idx)
+
+    get_score = lambda t, alpha: score_range[0] + (score_range[1] - score_range[0])*pareto.cdf(t, alpha) 
+
+    # Generate raw scores
+    raw_scores = np.array([get_score(theta[i], alpha) for i in item_idx])
+
+    # Apply risky bias: reviewers with bias & score above threshold get middle score
+    biased = risky_bias[reviewer_idx] == 1
+    bias_mask = biased & (raw_scores > score_range[1] - 1)
+    raw_scores[bias_mask] = score_range[0] + (score_range[1] - score_range[0]) / 2.
+
+    # Add noise and clip/round
+    raw_scores += np.random.normal(0, sigma_err, size=n_obs)
+    raw_scores = np.clip(np.round(raw_scores), score_range[0], score_range[1])
+
+    # Fill into score matrix
+    y = np.full((n_items, n_reviewers), np.nan)
+    y[item_idx, reviewer_idx] = raw_scores
+
+    # Generate intervals and point estimates
+    lower_bounds = np.nanmin(y, axis=1)
+    upper_bounds = np.nanmax(y, axis=1)
+    x_mean = np.nanmean(y, axis=1)
+    x_median = np.nanmedian(y, axis=1)
+    intervals = list(zip(lower_bounds, upper_bounds))
+
+    # Evaluate selection policies
+    p_merit, _, _ = solve_problem(intervals, k)
+    p_swiss = swiss_nsf(intervals, x_mean, k)
+    p_deterministic_mean = top_k(x_mean, k)
+    p_deterministic_median = top_k(x_median, k)
+
+    best_quality = np.dot(top_k(theta, k), theta)
+    q_merit = np.dot(p_merit, theta) / best_quality
+    q_swiss = np.dot(p_swiss, theta) / best_quality
+    q_deterministic_mean = np.dot(p_deterministic_mean, theta) / best_quality
+    q_deterministic_median = np.dot(p_deterministic_median, theta) / best_quality
+
+    return q_merit, q_swiss, q_deterministic_mean, q_deterministic_median
+
+
+CONFERENCE_PARAMS = {
+    'n_reviewers': 1000,
+    'n_items': 1000,
+    'items_per_rev': 5,
+    'score_range': (1, 10),
+    }
+
+SWISS_NSF_PARAMS = {
+    'n_reviewers': 10,
+    'n_items': 350,
+    'items_per_rev': 80,
+    'score_range': (1, 10),
+}    
+
+def run_linear_miscalibration_sims(vary_param, param_values, PARAMS=SWISS_NSF_PARAMS):
     linear_miscalibration_params={
         'sigma_theta': 2.0,
-        'sigma_b': 0.0,
+        'sigma_b': 2.0,
         'sigma_err': 0.5,
         'sigma_a': None
     }
 
     # Swiss NSF parameters
-    n_reviewers = 10
-    n_items = 350
-    items_per_rev = 80
+    n_reviewers = SWISS_NSF_PARAMS['n_reviewers']
+    n_items = SWISS_NSF_PARAMS['n_items']
+    items_per_rev = SWISS_NSF_PARAMS['items_per_rev']
+    score_range = SWISS_NSF_PARAMS['score_range']
     n_trials = 50
     ks = [n_items // 10, n_items // 3]
 
     print(f'Running simulations with Swiss NSF parameters')
     linear_results = []
-    for sigma_b in [0.0, 0.5, 1.0, 2.0, 4.0]:
-        linear_miscalibration_params['sigma_b'] = sigma_b
-        print(f'Running simulations with sigma_b={sigma_b}')
+    for param in param_values:
+        linear_miscalibration_params[vary_param] = param
+        print(f'Running simulations with {vary_param}={param}')
         t = time.time()
         
-        results = run_simulation(
+        results = run_miscalibration_simulation(
             n_reviewers=n_reviewers,
             n_items=n_items,
             items_per_rev=items_per_rev,
@@ -416,42 +438,86 @@ if __name__ == "__main__":
             ks=ks,
         )
 
-        print(f'Simulation with sigma_b={sigma_b} took {time.time() - t:.2f} seconds')
+        print(f'Simulation with {vary_param}={param} took {time.time() - t:.2f} seconds')
         
         linear_results.append(results)
     # Convert results to DataFrame
     linear_results_df = pd.concat(linear_results)
-    # Save results to CSV
-    linear_results_df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams.csv', index=False)
+    return linear_results_df
 
-    # Conference parameters (https://arxiv.org/pdf/2110.12607)
-    n_reviewers = 1000
-    n_items = 1000
-    items_per_rev = 5
-    n_trials = 10
-    ks = [n_items // 10, n_items // 3]
+def run_riskybias_sims(vary_param, param_values, PARAMS=SWISS_NSF_PARAMS, n_trials=1000):
+    n_reviewers = PARAMS['n_reviewers']
+    n_items = PARAMS['n_items']
+    items_per_rev = PARAMS['items_per_rev']
+    score_range = PARAMS['score_range']
+    n_trials = 1000
 
-    print(f'Running simulations with conference parameters')
-    linear_results = []
-    for sigma_b in [0.0, 0.5, 1.0, 2.0, 4.0]:
-        linear_miscalibration_params['sigma_b'] = sigma_b
-        print(f'Running simulations with sigma_b={sigma_b}')
+    k = 1 + (n_items // (score_range[1] - score_range[0]))
 
+    error_params = {
+        'sigma_err': 0.5,
+        'p_bias': 0.5,
+        'alpha': 1.5
+    }
+    
+    res = {}
+    for param in param_values:
+        res[param] = []
+        # Run simulations for each p_bias
+        print(f'Simulating with param {vary_param}:', param)
+        error_params[vary_param] = param
         t = time.time()
-        
-        results = run_simulation(
-            n_reviewers=n_reviewers,
-            n_items=n_items,
-            items_per_rev=items_per_rev,
-            error_params=linear_miscalibration_params,
-            error_type='linear',
-            n_trials=n_trials,
-            ks=ks,
-        )
+        for sim in range(n_trials):
+            q_merit, q_swiss, q_deterministic_mean, q_deterministic_median = simulate_risky_bias(
+                n_reviewers, n_items, items_per_rev, k, error_params, score_range
+            )
+            res[param].append({
+                    'q_merit': q_merit,
+                    'q_swiss': q_swiss,
+                    'q_deterministic_mean': q_deterministic_mean,
+                    'q_deterministic_median': q_deterministic_median
+                })
+        print('Simulation time:', time.time() - t, 'seconds')
 
-        print(f'Simulation with sigma_b={sigma_b} took {time.time() - t:.2f} seconds')
-        linear_results.append(results)
-    # Convert results to DataFrame
-    linear_results_df = pd.concat(linear_results)
-    # Save results to CSV
-    linear_results_df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams.csv', index=False)
+    # make res into a DataFrame
+    results = []
+    for param, values in res.items():
+        for value in values:
+            results.append({
+                vary_param: param,
+                'q_merit': value['q_merit'],
+                'q_swiss': value['q_swiss'],
+                'q_deterministic_mean': value['q_deterministic_mean'],
+                'q_deterministic_median': value['q_deterministic_median']
+            })
+    df_results = pd.DataFrame(results)
+
+    return df_results
+
+if __name__ == "__main__":
+   ## Run linear miscalibration sims
+    df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams.csv', index=False)
+
+    df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams_misspecified_sigmaa.csv', index=False)
+
+    df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS)
+    df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams.csv', index=False)
+
+    df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS)
+    df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams_misspecified_sigmaa.csv', index=False)
+
+
+    ### Run simulations for risky bias
+    df = run_riskybias_sims(vary_param='p_bias', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/riskybias_swissnsf_pbias.csv', index=False)
+
+    df = run_riskybias_sims(vary_param='sigma_err', param_values=[0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/riskybias_swissnsf_sigma_err.csv', index=False)
+
+    df = run_riskybias_sims(vary_param='alpha', param_values=[1.0, 1.25, 1.5, 2.0, 4.0],PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/riskybias_swissnsf_alpha.csv', index=False)
+
+
+    
