@@ -8,6 +8,22 @@ from merit import solve_problem
 from helpers import swiss_nsf, top_k
 import os
 
+CONFERENCE_PARAMS = {
+    'n_reviewers': 1000,
+    'n_items': 1000,
+    'items_per_rev': 5,
+    'score_range': (1, 10),
+    'name': 'Conference',
+    }
+
+SWISS_NSF_PARAMS = {
+    'n_reviewers': 10,
+    'n_items': 350,
+    'items_per_rev': 80,
+    'score_range': (1, 10),
+    'name': 'Swiss NSF',
+}    
+
 # Generate random assignment with n items, n reviewers and r reviews per item
 def generate_random_assignment(n_items, n_reviewers, items_per_rev):
     A = np.zeros((n_items, n_reviewers), dtype=int)
@@ -232,6 +248,90 @@ def fit_linear_miscalibration_model(A, y):
     
     return expected_rank, intervals50, intervals95, est_params
 
+def generate_subjective_score_data(n_reviewers, n_items, items_per_rev, k, model_params, score_range=(-5,5)):
+    prop_expert = model_params['prop_expert']
+    prop_controversial = model_params['prop_controversial']
+    prob_conflict = model_params['prob_conflict']
+
+    A = generate_random_assignment(n_items, n_reviewers, items_per_rev)
+    is_controversial = np.random.choice([0, 1], size=n_items, p=[1 - prop_controversial, prop_controversial])
+    is_expert = np.random.choice([0, 1], size=n_reviewers, p=[1 - prop_expert, prop_expert])
+
+    # Broadcast theta[i] to assigned (i, j) pairs
+    item_idx, reviewer_idx = np.where(A == 1)
+    n_obs = len(item_idx)
+
+    # Initialize scores array
+    scores = np.zeros(n_obs)
+    
+    for obs_idx in range(n_obs):
+        i = item_idx[obs_idx]  # item index
+        j = reviewer_idx[obs_idx]  # reviewer index
+        
+        # Determine scoring behavior based on item/reviewer type
+        if is_controversial[i] == 1 and is_expert[j] == 0:
+            # Controversial + non-expert: random sign, uniform from range
+            sign = np.random.choice([-1, 1])
+            score = sign * np.random.uniform(3, max(abs(score_range[0]), abs(score_range[1])))
+            
+        elif is_controversial[i] == 1 and is_expert[j] == 1:
+            # Controversial + expert: positive sign, uniform from range
+            score = np.random.uniform(3, score_range[1])
+
+        else:
+            # Non-controversial + non-expert: sample from uniform distribution
+            score = np.random.uniform(-2, 2)
+        
+        # Clip to score range
+        score = np.clip(score, score_range[0], score_range[1])
+        
+        scores[obs_idx] = score
+    
+    # Create score matrix Y where Y[i,j] is the score for item i by reviewer j
+    # Use NaN for unassigned pairs
+    y_full = np.full((n_items, n_reviewers), np.nan)
+    for obs_idx in range(n_obs):
+        i = item_idx[obs_idx]
+        j = reviewer_idx[obs_idx]
+        y_full[i, j] = scores[obs_idx]
+
+    # Subjective scores are mean score per item
+    theta = np.nanmean(y_full, axis=1)
+    
+    y = y_full.copy()  # Copy full scores matrix for further processing
+    # Drop expert scores with prob_conflict
+    if prob_conflict > 0:
+        for j in range(n_reviewers):
+            if is_expert[j] == 1:
+                conflict_mask = np.random.rand(n_items) < prob_conflict
+                y[conflict_mask, j] = np.nan  # Set scores to NaN for conflicts
+
+    # Generate intervals and point estimates
+    lower_bounds = np.nanmin(y, axis=1)
+    upper_bounds = np.nanmax(y, axis=1)
+    x_mean = np.nanmean(y, axis=1)
+    x_median = np.nanmedian(y, axis=1)
+    # replace Nans with 0s in above arrays
+    lower_bounds = np.nan_to_num(lower_bounds, nan=0.0)
+    upper_bounds = np.nan_to_num(upper_bounds, nan=0.0)
+    x_mean = np.nan_to_num(x_mean, nan=0.0)
+    x_median = np.nan_to_num(x_median, nan=0.0)
+    # Create intervals as tuples of (lower, upper)
+    intervals = list(zip(lower_bounds, upper_bounds))
+
+    # Evaluate selection policies
+    p_merit, _, _ = solve_problem(intervals, k)
+    p_swiss = swiss_nsf(intervals, x_mean, k)
+    p_deterministic_mean = top_k(x_mean, k)
+    p_deterministic_median = top_k(x_median, k)
+
+    best_quality = np.dot(top_k(theta, k), theta)
+    q_merit = np.dot(p_merit, theta) / best_quality
+    q_swiss = np.dot(p_swiss, theta) / best_quality
+    q_deterministic_mean = np.dot(p_deterministic_mean, theta) / best_quality
+    q_deterministic_median = np.dot(p_deterministic_median, theta) / best_quality
+
+    return q_merit, q_swiss, q_deterministic_mean, q_deterministic_median
 
 def run_miscalibration_simulation(n_items, n_reviewers, items_per_rev, error_params, error_type, ks, n_trials=10):
     results = []
@@ -391,21 +491,83 @@ def simulate_risky_bias(n_reviewers, n_items, items_per_rev, k, model_params, sc
     return q_merit, q_swiss, q_deterministic_mean, q_deterministic_median
 
 
-CONFERENCE_PARAMS = {
-    'n_reviewers': 1000,
-    'n_items': 1000,
-    'items_per_rev': 5,
-    'score_range': (1, 10),
+def run_subjective_score_sims(vary_param, param_values, PARAMS=SWISS_NSF_PARAMS, n_trials=1000):
+    """
+    Run simulations for subjective scoring model where reviewers can be experts or non-experts,
+    and items can be controversial or non-controversial.
+    
+    Parameters:
+    -----------
+    vary_param : str
+        Parameter to vary ('prop_expert', 'prop_controversial', 'prob_conflict')
+    param_values : list
+        Values of the parameter to test
+    PARAMS : dict
+        Dictionary with simulation parameters (n_reviewers, n_items, items_per_rev, score_range)
+    n_trials : int
+        Number of simulation trials to run
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Results dataframe with quality metrics for each method
+    """
+    n_reviewers = PARAMS['n_reviewers']
+    n_items = PARAMS['n_items']
+    items_per_rev = PARAMS['items_per_rev']
+    score_range = PARAMS.get('score_range', (-5, 5))  # Default to (-5, 5) for subjective scores
+    
+    # Set k as number of items divided by 10
+    k = n_items // 10
+    
+    # Default model parameters
+    model_params = {
+        'prop_expert': 0.1,        # 20% experts
+        'prop_controversial': 0.1,  # 10% controversial items
+        'prob_conflict': 0.1       # 10% probability of expert conflict
     }
+    
+    results = []
+    
+    for param_value in param_values:
+        print(f'Running simulations with {vary_param}={param_value}')
+        model_params[vary_param] = param_value
+        
+        t = time.time()
+        
+        for trial in range(n_trials):
+            if trial % 100 == 0 and trial > 0:
+                print(f'  Completed {trial}/{n_trials} trials')
+                
+            q_merit, q_swiss, q_deterministic_mean, q_deterministic_median = generate_subjective_score_data(
+                n_reviewers=n_reviewers,
+                n_items=n_items, 
+                items_per_rev=items_per_rev,
+                k=k,
+                model_params=model_params,
+                score_range=score_range
+            )
+            
+            results.append({
+                'trial': trial,
+                'param_name': vary_param,
+                'param_value': param_value,
+                'k': k,
+                'q_merit': q_merit,
+                'q_swiss': q_swiss,
+                'q_deterministic_mean': q_deterministic_mean,
+                'q_deterministic_median': q_deterministic_median,
+                'prop_expert': model_params['prop_expert'],
+                'prop_controversial': model_params['prop_controversial'],
+                'prob_conflict': model_params['prob_conflict']
+            })
+        
+        print(f'Simulation with {vary_param}={param_value} took {time.time() - t:.2f} seconds')
+    
+    return pd.DataFrame(results)
 
-SWISS_NSF_PARAMS = {
-    'n_reviewers': 10,
-    'n_items': 350,
-    'items_per_rev': 80,
-    'score_range': (1, 10),
-}    
 
-def run_linear_miscalibration_sims(vary_param, param_values, PARAMS=SWISS_NSF_PARAMS):
+def run_linear_miscalibration_sims(vary_param, param_values, PARAMS=SWISS_NSF_PARAMS, n_trials=50):
     linear_miscalibration_params={
         'sigma_theta': 2.0,
         'sigma_b': 2.0,
@@ -414,14 +576,13 @@ def run_linear_miscalibration_sims(vary_param, param_values, PARAMS=SWISS_NSF_PA
     }
 
     # Swiss NSF parameters
-    n_reviewers = SWISS_NSF_PARAMS['n_reviewers']
-    n_items = SWISS_NSF_PARAMS['n_items']
-    items_per_rev = SWISS_NSF_PARAMS['items_per_rev']
-    score_range = SWISS_NSF_PARAMS['score_range']
-    n_trials = 50
+    n_reviewers = PARAMS['n_reviewers']
+    n_items = PARAMS['n_items']
+    items_per_rev = PARAMS['items_per_rev']
+    score_range = PARAMS['score_range']
     ks = [n_items // 10, n_items // 3]
 
-    print(f'Running simulations with Swiss NSF parameters')
+    print(f"Running simulations with {PARAMS['name']} parameters")
     linear_results = []
     for param in param_values:
         linear_miscalibration_params[vary_param] = param
@@ -495,29 +656,34 @@ def run_riskybias_sims(vary_param, param_values, PARAMS=SWISS_NSF_PARAMS, n_tria
     return df_results
 
 if __name__ == "__main__":
-   ## Run linear miscalibration sims
-    df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
-    df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams.csv', index=False)
+    # ## Run linear miscalibration sims
+    # df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    # df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams.csv', index=False)
 
-    df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
-    df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams_misspecified_sigmaa.csv', index=False)
+    # df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    # df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams_misspecified_sigmaa.csv', index=False)
 
-    df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS)
-    df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams.csv', index=False)
+    # df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS, n_trials=10)
+    # df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams.csv', index=False)
 
-    df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS)
-    df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams_misspecified_sigmaa.csv', index=False)
+    # df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS, n_trials=10)
+    # df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams_misspecified_sigmaa.csv', index=False)
 
+    # ### Run simulations for risky bias
+    # df = run_riskybias_sims(vary_param='p_bias', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=SWISS_NSF_PARAMS)
+    # df.to_csv('res/simulation_results/riskybias_swissnsf_pbias.csv', index=False)
 
-    ### Run simulations for risky bias
-    df = run_riskybias_sims(vary_param='p_bias', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=SWISS_NSF_PARAMS)
-    df.to_csv('res/simulation_results/riskybias_swissnsf_pbias.csv', index=False)
+    # df = run_riskybias_sims(vary_param='sigma_err', param_values=[0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    # df.to_csv('res/simulation_results/riskybias_swissnsf_sigma_err.csv', index=False)
 
-    df = run_riskybias_sims(vary_param='sigma_err', param_values=[0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
-    df.to_csv('res/simulation_results/riskybias_swissnsf_sigma_err.csv', index=False)
+    # df = run_riskybias_sims(vary_param='alpha', param_values=[1.0, 1.25, 1.5, 2.0, 4.0],PARAMS=SWISS_NSF_PARAMS)
+    # df.to_csv('res/simulation_results/riskybias_swissnsf_alpha.csv', index=False)
 
-    df = run_riskybias_sims(vary_param='alpha', param_values=[1.0, 1.25, 1.5, 2.0, 4.0],PARAMS=SWISS_NSF_PARAMS)
-    df.to_csv('res/simulation_results/riskybias_swissnsf_alpha.csv', index=False)
+    # df = run_riskybias_sims(vary_param='p_bias', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=CONFERENCE_PARAMS)
+    # df.to_csv('res/simulation_results/riskybias_conference_pbias.csv', index=False)
 
+    df = run_subjective_score_sims(vary_param='prob_conflict', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=SWISS_NSF_PARAMS, n_trials=100)
+    df.to_csv('res/simulation_results/subjective_scores_swissnsf_prob_conflict.csv', index=False)
 
-    
+    df = run_subjective_score_sims(vary_param='prob_conflict', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=CONFERENCE_PARAMS, n_trials=100)
+    df.to_csv('res/simulation_results/subjective_scores_conference_prop_expert.csv', index=False)
