@@ -252,7 +252,7 @@ def plot_intervals(intervals, order=None, x=None,
         if hide_y:
             ax.set_yticks([])
         else:
-            ax.set_xlabel('Interval')
+            ax.set_xlabel('Proposal number')
             ax.set_ylabel('Score')
 
     else:
