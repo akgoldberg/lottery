@@ -6,10 +6,11 @@ Uncertainty: Applications to Peer Review and Grant Funding"](https://arxiv.org/p
 ## Getting Started
 
 1. Clone the repository.
-2. Install python packages (see `requirements.txt`). NOTE: to run experiments you will additionally need to install cvxpy and GPy with pip to generate intervals, but these are not necessary to run MERIT.
+2. Install python packages (run `pip install -r requirements.txt` in terminal).*
 3. Install Gurobi: MERIT uses Gurobi to efficiently solve large linear programs. Academics can obtain a license to this software for free. Please follow [instructions from Gurobi](https://www.gurobi.com/academia/academic-program-and-licenses/) to install and activate the license.
 4. Run `example.ipynb` notebook to test usage of MERIT.
 
+*Note: to replicate our synthetic data experiments you will additionally need to install the Python pacakges `cvxpy` and `GPy`, but these are not necessary to run MERIT.
 
 ## Directory Structure
 
