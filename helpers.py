@@ -37,38 +37,6 @@ def prune_instance(intervals, T):
     
     return pruned_intervals, top, bottom
 
-# Ensure that if i dominates j, then either p_i = 1 or p_j = 0
-def postprocess_solution(p, intervals):
-    items = list(zip(p, intervals, range(len(p))))
-    
-    # Sort items by ascending order of p
-    items.sort(key=lambda x: x[0])
-    
-    # Extract the sorted probabilities, intervals, and original indices
-    sorted_p, sorted_intervals, original_indices = zip(*items)
-    
-    # Convert sorted_p to a list for mutability
-    sorted_p = list(sorted_p)
-    
-    n = len(sorted_p)
-    
-    # Iterate over each element in the sorted list
-    for b in range(n):
-        if sorted_p[b] == 0:
-            continue
-        for a in range(n-1, b, -1):
-            if sorted_intervals[a][0] > sorted_intervals[b][1] and sorted_p[a] < 1:
-                d = min(sorted_p[b], 1 - sorted_p[a])
-                sorted_p[b] -= d
-                sorted_p[a] += d
-    
-    # Reorder the probabilities to match the original order
-    adjusted_p = [0] * n
-    for i, index in enumerate(original_indices):
-        adjusted_p[index] = sorted_p[i]
-    
-    return adjusted_p
-
 # Given a list of intervals, partition them into disjoint subsets such that all intervals in a subset are monotonically ordered.
 def partition_intervals(intervals, return_inds=False):
     # Sort intervals by decreasing # of intervals they are strictly above, breaking ties by # of intervals they are strictly below
@@ -315,50 +283,4 @@ def verify_monotonicity_in_k(pseq, raise_error=False, print_out=True):
     if raise_error:
         print('Valid solution: p is monotonic in k.')
     return True
-
-#######################################################################
-#                           Sampling                                  #
-#######################################################################
-
-# Sample exaclty k items from a population with marginal probabilities given by p (p sum to k).
-# Returns a list of indices of selected items
-# Source: https://projecteuclid.org/journals/annals-of-mathematical-statistics/volume-20/issue-3/On-the-Theory-of-Systematic-Sampling-II/10.1214/aoms/1177729988.full
-def systematic_sampling(k, p):
-    n = len(p)
-    assert np.isclose(sum(p), k), "Marginal probabilities must sum to k"
-
-    # Randomly permute order of items
-    perm = np.random.permutation(n)
-    p = [p[i] for i in perm]
-
-    # Compute cumulative probabilities with S[0] = 0
-    S = np.cumsum(p)
-    S = np.insert(S, 0, 0)  # Now length n+1
-    
-    # Generate sorted sampling points 
-    u = np.random.uniform(0, 1)
-    sampling_points = [u + m for m in range(k)]
-    
-    # Select items with each point in [S[j], S[j+1])
-    selected = []
-    j = 0  # Pointer to current interval
-    for point in sampling_points:
-        # Advance pointer until we find S[j] > point
-        while j < len(S) and S[j] <= point:
-            j += 1
-        selected.append(perm[j-1])  # Items are 1-indexed, so we subtract 1
-    
-    return selected
-
-# verify that systematic sampling works as expected 
-def verify_sampling(n, k, p, num_trials=10_000):
-    counts = np.zeros(n)
-    
-    for _ in range(num_trials):
-        sample = systematic_sampling(k, p)
-        for item in sample:
-            counts[item] += 1
-            
-    empirical_p = counts / num_trials  # Correct normalization
-    return empirical_p
 

@@ -243,11 +243,11 @@ def run_data_ablations(data):
         json.dump(results, f, indent=4)
 
 if __name__ == "__main__":
-    # print('===========Running All Case Studies===========')
-    # run_case_studies()
+    print('===========Running All Case Studies===========')
+    run_case_studies()
     for i in range(10):
         print(f'===========Running Iteration {i} for Computation Tests===========')
         run_case_studies(computation_test=True, iter=i)
 
-    # # print('===========Running Ablations===========')
-    # run_data_ablations('neurips')
+    print('===========Running Ablations===========')
+    run_data_ablations('neurips')

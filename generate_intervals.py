@@ -5,7 +5,7 @@ import pandas as pd
 ######                   Load Data-Driven Intervals                  ######
 ###########################################################################
 
-def load_swiss_nsf(PATH='SwissNSFData/intervals.csv'):
+def load_swiss_nsf(PATH='data/SwissNSFData/intervals.csv'):
     df = pd.read_csv(PATH)
     df.sort_values(by='m', ascending=True, inplace=True) # lower is better for Swiss NSF (ranked by expectd rank)
     df.reset_index(drop=True, inplace=True)
@@ -18,7 +18,7 @@ def load_swiss_nsf(PATH='SwissNSFData/intervals.csv'):
 
     return x, intervals, intervals90, half_intervals, half_intervals90
 
-def load_swiss_manski(PATH='SwissNSFData/manski_intervals.csv'):
+def load_swiss_manski(PATH='data/SwissNSFData/manski_intervals.csv'):
     df = pd.read_csv(PATH)
     df.sort_values(by='median', ascending=False, inplace=True) 
     df.reset_index(drop=True, inplace=True)
@@ -29,7 +29,7 @@ def load_swiss_manski(PATH='SwissNSFData/manski_intervals.csv'):
     return x, intervals
 
 
-def load_neurips_leaveoneout(PATH='ConferenceReviewData/neurips2024_data/neurips2024_reviews.csv'):
+def load_neurips_leaveoneout(PATH='data/ConferenceReviewData/neurips2024_data/neurips2024_reviews.csv'):
     df = pd.read_csv(PATH)
     df = df[df.decision != 'Reject'].reset_index(drop=True)
     ratings = df.groupby('paper_id').agg({'rating': list, 'decision': 'max'}).reset_index()
@@ -49,7 +49,7 @@ def load_neurips_leaveoneout(PATH='ConferenceReviewData/neurips2024_data/neurips
 
     return x, intervals, decision
 
-def load_neurips_minmax(PATH='ConferenceReviewData/neurips2024_data/neurips2024_reviews.csv'):
+def load_neurips_minmax(PATH='data/ConferenceReviewData/neurips2024_data/neurips2024_reviews.csv'):
     df = pd.read_csv(PATH)
     df = df[df.decision != 'Reject'].reset_index(drop=True)
     ratings = df.groupby('paper_id').agg({'rating': ['max', 'mean', 'min', 'count'], 'decision': 'max'}).reset_index()
@@ -62,7 +62,7 @@ def load_neurips_minmax(PATH='ConferenceReviewData/neurips2024_data/neurips2024_
 
     return x, intervals, decisions
 
-def load_neurips_gaussian_model(PATH='ConferenceReviewData/neurips2024_data/neurips2024_gaussian_intervals.csv'):
+def load_neurips_gaussian_model(PATH='data/ConferenceReviewData/neurips2024_data/neurips2024_gaussian_intervals.csv'):
    df = pd.read_csv(PATH)
    x = df['theta_mean']
    intervals50 = list(zip(df['theta_lower50'], df['theta_upper50']))
@@ -71,7 +71,7 @@ def load_neurips_gaussian_model(PATH='ConferenceReviewData/neurips2024_data/neur
 
    return x, intervals50, intervals95, decision
 
-def load_neurips_subjectivity_intervals(PATH='ConferenceReviewData/neurips2024_data/neurips2024_subjectivity_intervals.csv'):
+def load_neurips_subjectivity_intervals(PATH='data/ConferenceReviewData/neurips2024_data/neurips2024_subjectivity_intervals.csv'):
     df = pd.read_csv(PATH)
     df = df[df.decision != 'Reject'].reset_index(drop=True)
     x = df['rating']
@@ -82,7 +82,7 @@ def load_neurips_subjectivity_intervals(PATH='ConferenceReviewData/neurips2024_d
     decision = decision.replace({'Accept (poster)': 'Poster', 'Accept (oral)': 'Spotlight/Oral', 'Accept (spotlight)': 'Spotlight/Oral'})
     return x, intervals, decision
 
-def load_iclr_leaveoneout(PATH='ConferenceReviewData/iclr2025_data/iclr2025_reviews.csv', drop_withdrawn=False):
+def load_iclr_leaveoneout(PATH='data/ConferenceReviewData/iclr2025_data/iclr2025_reviews.csv', drop_withdrawn=False):
     df = pd.read_csv(PATH)
     if drop_withdrawn:
         df = df[df.decision != 'Withdrawn'].reset_index(drop=True) # remove withdrawn papers
@@ -107,7 +107,7 @@ def load_iclr_leaveoneout(PATH='ConferenceReviewData/iclr2025_data/iclr2025_revi
 
     return x, intervals, decision
 
-def load_iclr_gaussian_model(PATH='ConferenceReviewData/iclr2025_data/iclr2025_gaussian_intervals.csv', drop_withdrawn=False):
+def load_iclr_gaussian_model(PATH='data/ConferenceReviewData/iclr2025_data/iclr2025_gaussian_intervals.csv', drop_withdrawn=False):
     df = pd.read_csv(PATH)
 
     if drop_withdrawn:
@@ -126,7 +126,7 @@ def load_iclr_gaussian_model(PATH='ConferenceReviewData/iclr2025_data/iclr2025_g
 
     return x, intervals50, intervals95, decision
 
-def load_iclr_subjectivity_intervals(PATH='ConferenceReviewData/iclr2025_data/iclr2025_subjectivity_intervals.csv', drop_withdrawn=False):
+def load_iclr_subjectivity_intervals(PATH='data/ConferenceReviewData/iclr2025_data/iclr2025_subjectivity_intervals.csv', drop_withdrawn=False):
     df = pd.read_csv(PATH)
     if drop_withdrawn:
         df = df[df.decision != 'Withdrawn'].reset_index(drop=True) # remove withdrawn papers

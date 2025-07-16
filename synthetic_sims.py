@@ -656,31 +656,31 @@ def run_riskybias_sims(vary_param, param_values, PARAMS=SWISS_NSF_PARAMS, n_tria
     return df_results
 
 if __name__ == "__main__":
-    # ## Run linear miscalibration sims
-    # df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
-    # df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams.csv', index=False)
+    ## Run linear miscalibration sims
+    df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams.csv', index=False)
 
-    # df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
-    # df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams_misspecified_sigmaa.csv', index=False)
+    df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/linear_miscalibration_results_swissnsfparams_misspecified_sigmaa.csv', index=False)
 
-    # df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS, n_trials=10)
-    # df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams.csv', index=False)
+    df = run_linear_miscalibration_sims('sigma_b', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS, n_trials=10)
+    df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams.csv', index=False)
 
-    # df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS, n_trials=10)
-    # df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams_misspecified_sigmaa.csv', index=False)
+    df = run_linear_miscalibration_sims('sigma_a', [0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=CONFERENCE_PARAMS, n_trials=10)
+    df.to_csv('res/simulation_results/linear_miscalibration_results_conferenceparams_misspecified_sigmaa.csv', index=False)
 
-    # ### Run simulations for risky bias
-    # df = run_riskybias_sims(vary_param='p_bias', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=SWISS_NSF_PARAMS)
-    # df.to_csv('res/simulation_results/riskybias_swissnsf_pbias.csv', index=False)
+    ### Run simulations for risky bias
+    df = run_riskybias_sims(vary_param='p_bias', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/riskybias_swissnsf_pbias.csv', index=False)
 
-    # df = run_riskybias_sims(vary_param='sigma_err', param_values=[0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
-    # df.to_csv('res/simulation_results/riskybias_swissnsf_sigma_err.csv', index=False)
+    df = run_riskybias_sims(vary_param='sigma_err', param_values=[0.0, 0.5, 1.0, 2.0, 4.0], PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/riskybias_swissnsf_sigma_err.csv', index=False)
 
-    # df = run_riskybias_sims(vary_param='alpha', param_values=[1.0, 1.25, 1.5, 2.0, 4.0],PARAMS=SWISS_NSF_PARAMS)
-    # df.to_csv('res/simulation_results/riskybias_swissnsf_alpha.csv', index=False)
+    df = run_riskybias_sims(vary_param='alpha', param_values=[1.0, 1.25, 1.5, 2.0, 4.0],PARAMS=SWISS_NSF_PARAMS)
+    df.to_csv('res/simulation_results/riskybias_swissnsf_alpha.csv', index=False)
 
-    # df = run_riskybias_sims(vary_param='p_bias', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=CONFERENCE_PARAMS)
-    # df.to_csv('res/simulation_results/riskybias_conference_pbias.csv', index=False)
+    df = run_riskybias_sims(vary_param='p_bias', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=CONFERENCE_PARAMS)
+    df.to_csv('res/simulation_results/riskybias_conference_pbias.csv', index=False)
 
     df = run_subjective_score_sims(vary_param='prob_conflict', param_values=np.arange(0.0, 1.0, 0.1), PARAMS=SWISS_NSF_PARAMS, n_trials=100)
     df.to_csv('res/simulation_results/subjective_scores_swissnsf_prob_conflict.csv', index=False)
